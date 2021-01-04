@@ -8,7 +8,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
 project(2D_TLM LANGUAGES CUDA CXX)
 
 
-add_executable(2D_TLM 1DTLM.cu)
+add_executable(2D_TLM 2DTLM.cu)
 
 set_target_properties(
         2D_TLM
