@@ -27,47 +27,51 @@ using namespace std;
 double  tlmSource(double, double, double);          // excitation function
 double ** declare_array2D(int, int);                // Population function
 
-ofstream gaussian_time("gaussian_excitation.out");  // log excitation function to file
 ofstream output("output.out");       // log probe voltage at a pint on the line versus time
 
 struct dev_data{
-    double** d_V1;
-    double** d_V2;
-    double** d_V3;
-    double** d_V4;
-    double* coeff;
+    double* d_V1;
+    double* d_V2;
+    double* d_V3;
+    double* d_V4;
+    const double* coeff;
     double* out;
-    int* d_Ein;
-    int* d_Eout;
+    const int* d_Ein;
+    const int* d_Eout;
 };
-
+__global__ void tlmApplySource( dev_data dev,double source, int N){
+    //Apply Source
+    auto tmp_idx = dev.d_Ein[0] + dev.d_Ein[1] * N;
+    dev.d_V1[tmp_idx] = dev.d_V1[tmp_idx] + source;
+    dev.d_V2[tmp_idx] = dev.d_V2[tmp_idx] - source;
+    dev.d_V3[tmp_idx] = dev.d_V3[tmp_idx] - source;
+    dev.d_V4[tmp_idx] = dev.d_V4[tmp_idx] + source;
+}
 
 // TLM scatter on GPU
-__global__ void tlmScatter(dev_data dev, int N, int n,  double source)
-{
-    auto idx = blockIdx.x*blockDim.x + threadIdx.x;
-    auto idy = blockIdx.y*blockDim.y + threadIdx.y;
-    //apply source
-    if (idx == 0){
-        dev.d_V1[dev.d_Ein[0]][dev.d_Ein[1]] = dev.d_V1[dev.d_Ein[0]][dev.d_Ein[1]] + source;
-        dev.d_V2[dev.d_Ein[0]][dev.d_Ein[1]] = dev.d_V2[dev.d_Ein[0]][dev.d_Ein[1]] - source;
-        dev.d_V3[dev.d_Ein[0]][dev.d_Ein[1]] = dev.d_V3[dev.d_Ein[0]][dev.d_Ein[1]] - source;
-        dev.d_V4[dev.d_Ein[0]][dev.d_Ein[1]] = dev.d_V4[dev.d_Ein[0]][dev.d_Ein[1]] + source;
-    }
+__global__ void tlmScatter(dev_data dev, int N, const double source,int  n){
+
+    auto idx = blockIdx.x * blockDim.x + threadIdx.x;
+    auto idy = blockIdx.y * blockDim.y + threadIdx.y;
+
+    auto index = idx + idy * N;
 
     //scatter
-    double& I = dev.coeff[0];
-    double& Z = dev.coeff[1];
-    if (idx < N)
+    double Z = dev.coeff[0];
+    double I = (2 * dev.d_V1[index] + 2 * dev.d_V4[index] - 2 * dev.d_V2[index] - 2 * dev.d_V3[index]) / (4 * Z);
+
+    if ( index < N*N)
     {
-        auto V = 2 * dev.d_V1[idx][idy] - I * Z;    //port1
-        dev.d_V1[idx][idy] = V - dev.d_V1[idx][idy];
-        V = 2 * dev.d_V2[idx][idy] + I * Z;         //port2
-        dev.d_V2[idx][idy] = V - dev.d_V2[idx][idy];
-        V = 2 * dev.d_V3[idx][idy] + I * Z;         //port3
-        dev.d_V3[idx][idy] = V - dev.d_V3[idx][idy];
-        V = 2 * dev.d_V4[idx][idy] - I * Z;         //port4
-        dev.d_V4[idx][idy] = V - dev.d_V4[idx][idy];
+
+
+        double V = 2 * dev.d_V1[index] - I * Z;    //port1
+        dev.d_V1[index] = V - dev.d_V1[index];
+        V = 2 * dev.d_V2[index] + I * Z;         //port2
+        dev.d_V2[index] = V - dev.d_V2[index];
+        V = 2 * dev.d_V3[index] + I * Z;         //port3
+        dev.d_V3[index] = V - dev.d_V3[index];
+        V = 2 * dev.d_V4[index] - I * Z;         //port4
+        dev.d_V4[index] = V - dev.d_V4[index];
     }
 }
 
@@ -77,36 +81,45 @@ __global__ void tlmConnect(dev_data dev, int N, int n)
     auto idx = blockIdx.x*blockDim.x + threadIdx.x;
     auto idy = blockIdx.y*blockDim.y + threadIdx.y;
 
+    auto index = idx + idy * N;
+    
     //Connect
-    if (idx > 0 && idy > 0 && idx < N && idy < N)
+    if ( idx > 0 && index < N*N)
     {
-        auto V = dev.d_V2[idx][idy];
-        dev.d_V2[idx][idy] = dev.d_V4[idx - 1][idy];
-        dev.d_V4[idx - 1][idy] = V;
-
-        V = dev.d_V1[idx][idy];
-        dev.d_V1[idx][idy] = dev.d_V3[idx][idy - 1];
-        dev.d_V3[idx][idy - 1] = V;
+        auto V = dev.d_V2[index];
+        dev.d_V2[index] = dev.d_V4[(idx - 1)+ idy * N];
+        dev.d_V4[(idx - 1) + idy * N] = V;
     }
 
-    //apply boundaries
-    double& rXmin = dev.coeff[2];
-    double& rXmax = dev.coeff[3];
-    double& rYmin = dev.coeff[4];
-    double& rYmax = dev.coeff[5];
-    if (idx == 0)
+    if ( idy > 0 && index < N*N)
     {
-        dev.d_V3[idx][N - 1] = rYmax * dev.d_V3[idx][N - 1];
-        dev.d_V1[idx][0] = rYmin * dev.d_V1[idx][0];
+        auto V = dev.d_V1[index];
+        dev.d_V1[index] = dev.d_V3[idx + (idy - 1)*N];
+        dev.d_V3[idx + (idy - 1)*N] = V;
     }
-    if (idy == 0){
-        dev.d_V4[N - 1][idy] = rXmax * dev.d_V4[N - 1][idy];
-        dev.d_V2[0][idy] = rXmin * dev.d_V2[0][idy];
+
+
+}
+
+__global__ void applyBoundary(dev_data dev, int N) {
+    double rXmin = dev.coeff[2];
+    double rXmax = dev.coeff[3];
+    double rYmin = dev.coeff[4];
+    double rYmax = dev.coeff[5];
+
+    for (int x = 0; x < N; x++) {
+        dev.d_V3[x + (N - 1)*N] = rYmax * dev.d_V3[x + (N - 1)*N];
+        dev.d_V1[x] = rYmin * dev.d_V1[x];
+    }
+    for (int y = 0; y < N; y++) {
+        dev.d_V4[(N - 1) + y*N] = rXmax * dev.d_V4[(N - 1) + y*N];
+        dev.d_V2[y*N] = rXmin * dev.d_V2[y*N];
     }
 }
 
-__global__ void evalutateOut(dev_data dev, int n){
-    dev.out[n] = dev.d_V2[dev.d_Eout[0]][dev.d_Eout[1]] + dev.d_V4[dev.d_Eout[0]][dev.d_Eout[1]];
+__global__ void evalutateOut(dev_data dev, int N, int n){
+    auto tmp_idx = dev.d_Ein[0] + dev.d_Ein[1] * N;
+    dev.out[n] = dev.d_V2[tmp_idx] + dev.d_V4[tmp_idx];
 }
 
 int main()
@@ -116,7 +129,7 @@ int main()
     clock_t start, end;
 
     int NX = 100;   // dim one of nodes
-    int NY = 100;   // dim 2 of nodes
+    int NY = NX;   // dim 2 of nodes
     int NT = 8192;   // number of time steps
 
     double dl = 1;       // set node line segment length in metres
@@ -153,16 +166,15 @@ int main()
 
 
     /// device arrays
-    double** dev_V1;
-    double** dev_V2;
-    double** dev_V3;
-    double** dev_V4;
+    double* dev_V1;
+    double* dev_V2;
+    double* dev_V3;
+    double* dev_V4;
     double* dev_coeff;
     double* dev_output;
     int* dev_Ein;
     int* dev_Eout;
 
-//    double* dev_Vp;         // allocate storage for Vp array
 
     ///allocate memory on device
     auto sz = NX * NY * sizeof(double);
@@ -175,7 +187,8 @@ int main()
     cudaMalloc((void**)&dev_Ein, sizeof(int)*2);
     cudaMalloc((void**)&dev_Eout, sizeof(int)*2);
 
-//    cudaMalloc((void**)&dev_Vp, NT * sizeof(double));
+    auto err = cudaGetLastError();
+
 
     ///copy memory areas from host to device
     cudaMemcpy(dev_V1, V1, NX * NY * sizeof(double), cudaMemcpyHostToDevice);
@@ -186,7 +199,8 @@ int main()
     cudaMemcpy(dev_Ein, Ein, sizeof(int)*2, cudaMemcpyHostToDevice);
     cudaMemcpy(dev_Eout, Eout, sizeof(int)*2, cudaMemcpyHostToDevice);
 
-//    cudaMemcpy(dev_Vp, Vp, NT * sizeof(double), cudaMemcpyHostToDevice);
+    err = cudaGetLastError();
+
 
     // Start of TLM algorithm
     //
@@ -196,16 +210,34 @@ int main()
 
     start = clock();
 
+    dim3 dimBlock(32,32);
+    dim3 dimGrid(NX/dimBlock.x,NX/dimBlock.y);
+    err = cudaGetLastError();
+    int i = 0;
     for (int n = 0; n < NT; n++)
     {
-        double source = tlmSource(n * dt, delay, width);
-        tlmScatter <<<NX, NX >>> (dev_Data, NX*NY, n, source);
-        tlmConnect <<<NX, NX >>> (dev_Data, NX*NY, n);
-        evalutateOut<<<1,1>>>(dev_Data, n);
+        double source = (1 / sqrt(2.)) * exp(-(n * dt - delay) * (n * dt - delay) / (width * width));
+        tlmApplySource <<<1, 1>>> (dev_Data, source, NX);
+        err = cudaGetLastError();
+        i = 0;
+        tlmScatter <<<dimGrid, dimBlock>>> (dev_Data, NX, source, n);
+        err = cudaGetLastError();
+        i = 0;
+        tlmConnect <<<dimGrid, dimBlock>>> (dev_Data, NX, n);
+        err = cudaGetLastError();
+        i = 0;
+        applyBoundary<<<1, 1024>>> (dev_Data, NX);
+        err = cudaGetLastError();
+        i=0;
+        evalutateOut<<<1, 1>>>(dev_Data, NX,n);
+        err = cudaGetLastError();
+        i = 0;
     }
-    cudaMemcpy(v_output, dev_output, sizeof(double), cudaMemcpyDeviceToHost);
+    err = cudaGetLastError();
+    cudaMemcpy(v_output, dev_output, sizeof(double)*NT, cudaMemcpyDeviceToHost);
+    err = cudaGetLastError();
     for (int n = 0; n < NT; n++){
-        output << n * dt << "  " << v_output[n] << endl;
+        output << n * dt << "  " <<  v_output[n] << endl;
     }
     // End of TLM algorithm
     
@@ -218,12 +250,7 @@ int main()
     cudaFree(dev_V2);
     cudaFree(dev_V3);
     cudaFree(dev_V4);
-//    cudaFree(dev_Vp);
 
-//    // write measured voltages to file
-//    for (int n = 0; n < NT; n++) {
-//        line_voltage << dt * n << "  " << Vp[n] << endl;
-//    }
 
     double TLM_Execution_Time = double(end - start) / double(CLOCKS_PER_SEC);
     cout << "Time taken by TLM algorithm : " << fixed << TLM_Execution_Time << setprecision(5);
@@ -238,7 +265,7 @@ double tlmSource(double time, double delay, double width)
     double source = exp(-1.0 * double(time - delay) * double(time - delay) / (width * width));
 
     // log value of gaussian voltage to file
-    gaussian_time << time << "  " << source << endl; //write source funtion to file, comment out for timing
+//    gaussian_time << time << "  " << source << endl; //write source funtion to file, comment out for timing
 
     return source;
 }
