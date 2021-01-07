@@ -229,9 +229,7 @@ int main()
     // loop over total time NT in steps of dt
     for (int n = 0; n < NT; n++)
     {
-        //Lap Timer
-        auto lap_start = std::chrono::high_resolution_clock::now();
-
+        //Calculate V Source for this delta
         double source = (1 / sqrt(2.)) * exp(-(n * dt - delay) * (n * dt - delay) / (width * width));
         //Apply the newly calculated Source
         tlmApplySource  <<<1, 1>>> (dev_Data, source, NX);
@@ -242,12 +240,6 @@ int main()
         //Get the Output from the mesh
         tlmApplyProbe   <<<1, 1>>> (dev_Data, n, NX);
 
-        //Hint Progress
-        auto lap_end = std::chrono::high_resolution_clock::now();
-        if (n % 100 == 0){
-            std::chrono::duration<double> diff = lap_end-lap_start;
-            cout << n << ", " << diff.count() << endl;
-        }
     }
     //Get Result from Device
     cudaMemcpy(v_output, dev_output, sizeof(double)*NT, cudaMemcpyDeviceToHost);
