@@ -14,13 +14,12 @@
 
 #include <iostream>
 #include <fstream>
-#include <iomanip>  // for setprecision
 #include <ctime>   // for clock
 #include <cmath>
 
-#define c0 299792458        // speed of light in a vacuum
+#define c 299792458        // speed of light in a vacuum
 #define mu0 M_PI*4e-7         // magnetic permeability in a vacuum H/m
-#define eta0 c0*mu0          // wave impedance in free space
+#define eta0 c*mu0          // wave impedance in free space
 
 using namespace std;
 
@@ -49,21 +48,26 @@ __global__ void tlmApplySource( dev_data dev,double source, int N){
 }
 
 // TLM scatter on GPU
-__global__ void tlmScatter(dev_data dev, int N, const double source,int  n){
+__global__ void tlmScatter(dev_data dev, int N, double source){
 
     auto idx = blockIdx.x * blockDim.x + threadIdx.x;
     auto idy = blockIdx.y * blockDim.y + threadIdx.y;
 
     auto index = idx + idy * N;
 
+//    if (idx == 0 && idy == 0){
+//        auto tmp_idx = dev.d_Ein[0] + dev.d_Ein[1] * N;
+//        dev.d_V1[tmp_idx] = dev.d_V1[tmp_idx] + source;
+//        dev.d_V2[tmp_idx] = dev.d_V2[tmp_idx] - source;
+//        dev.d_V3[tmp_idx] = dev.d_V3[tmp_idx] - source;
+//        dev.d_V4[tmp_idx] = dev.d_V4[tmp_idx] + source;
+//    }
+
     //scatter
     double Z = dev.coeff[0];
-    double I = (2 * dev.d_V1[index] + 2 * dev.d_V4[index] - 2 * dev.d_V2[index] - 2 * dev.d_V3[index]) / (4 * Z);
-
-    if ( index < N*N)
+   if ( index < N*N)
     {
-
-
+        double I = (2 * dev.d_V1[index] + 2 * dev.d_V4[index] - 2 * dev.d_V2[index] - 2 * dev.d_V3[index]) / (4 * Z);
         double V = 2 * dev.d_V1[index] - I * Z;    //port1
         dev.d_V1[index] = V - dev.d_V1[index];
         V = 2 * dev.d_V2[index] + I * Z;         //port2
@@ -72,7 +76,7 @@ __global__ void tlmScatter(dev_data dev, int N, const double source,int  n){
         dev.d_V3[index] = V - dev.d_V3[index];
         V = 2 * dev.d_V4[index] - I * Z;         //port4
         dev.d_V4[index] = V - dev.d_V4[index];
-    }
+   }
 }
 
 //TLM connect and apply boundary on GPU
@@ -82,7 +86,7 @@ __global__ void tlmConnect(dev_data dev, int N, int n)
     auto idy = blockIdx.y*blockDim.y + threadIdx.y;
 
     auto index = idx + idy * N;
-    
+
     //Connect
     if ( idx > 0 && index < N*N)
     {
@@ -97,6 +101,22 @@ __global__ void tlmConnect(dev_data dev, int N, int n)
         dev.d_V1[index] = dev.d_V3[idx + (idy - 1)*N];
         dev.d_V3[idx + (idy - 1)*N] = V;
     }
+
+//    //Apply Boundaries
+//    double rXmin = dev.coeff[2];
+//    double rXmax = dev.coeff[3];
+//    double rYmin = dev.coeff[4];
+//    double rYmax = dev.coeff[5];
+//
+//    if (idy == N-1*N && index < N*N){
+//        dev.d_V3[idx + (N - 1)*N] = rYmax * dev.d_V3[idx + (N - 1)*N];
+//        dev.d_V1[idx] = rYmin * dev.d_V1[idx];
+//    }
+//
+//    if (idx == n-1 && index < N*N) {
+//        dev.d_V4[(N - 1) + idy*N] = rXmax * dev.d_V4[(N - 1) + idy*N];
+//        dev.d_V2[idy*N] = rXmin * dev.d_V2[idy*N];
+//    }
 
 
 }
@@ -118,7 +138,7 @@ __global__ void applyBoundary(dev_data dev, int N) {
 }
 
 __global__ void evalutateOut(dev_data dev, int N, int n){
-    auto tmp_idx = dev.d_Ein[0] + dev.d_Ein[1] * N;
+    auto tmp_idx = dev.d_Eout[0] + dev.d_Eout[1] * N;
     dev.out[n] = dev.d_V2[tmp_idx] + dev.d_V4[tmp_idx];
 }
 
@@ -129,11 +149,10 @@ int main()
     clock_t start, end;
 
     int NX = 100;   // dim one of nodes
-    int NY = NX;   // dim 2 of nodes
+    int NY = 100;   // dim 2 of nodes
     int NT = 8192;   // number of time steps
-
     double dl = 1;       // set node line segment length in metres
-    double dt = dl / (sqrt(2.) * c0);    // set time step duration
+    double dt = dl / (sqrt(2.) * c);    // set time step duration
 
 
     //2D mesh variables
@@ -210,23 +229,26 @@ int main()
 
     start = clock();
 
-    dim3 dimBlock(32,32);
-    dim3 dimGrid(NX/dimBlock.x,NX/dimBlock.y);
+    dim3 dimBlock(10,10);
+    dim3 dimGrid(ceil(NX/dimBlock.x),ceil(NY/dimBlock.y));
+
     err = cudaGetLastError();
     int i = 0;
     for (int n = 0; n < NT; n++)
     {
+
         double source = (1 / sqrt(2.)) * exp(-(n * dt - delay) * (n * dt - delay) / (width * width));
         tlmApplySource <<<1, 1>>> (dev_Data, source, NX);
         err = cudaGetLastError();
         i = 0;
-        tlmScatter <<<dimGrid, dimBlock>>> (dev_Data, NX, source, n);
+        tlmScatter <<<dimGrid, dimBlock>>> (dev_Data, NX, source);
         err = cudaGetLastError();
         i = 0;
+        cudaDeviceSynchronize();
         tlmConnect <<<dimGrid, dimBlock>>> (dev_Data, NX, n);
         err = cudaGetLastError();
         i = 0;
-        applyBoundary<<<1, 1024>>> (dev_Data, NX);
+        applyBoundary<<<1, 1>>> (dev_Data, NX);
         err = cudaGetLastError();
         i=0;
         evalutateOut<<<1, 1>>>(dev_Data, NX,n);
@@ -250,12 +272,16 @@ int main()
     cudaFree(dev_V2);
     cudaFree(dev_V3);
     cudaFree(dev_V4);
+    cudaFree(dev_output);
+    cudaFree(dev_coeff);
+    cudaFree(dev_Ein);
+    cudaFree(dev_Eout);
 
 
-    double TLM_Execution_Time = double(end - start) / double(CLOCKS_PER_SEC);
-    cout << "Time taken by TLM algorithm : " << fixed << TLM_Execution_Time << setprecision(5);
-    cout << " sec " << endl;
-    return 0;
+//    double TLM_Execution_Time = double(end - start) / double(CLOCKS_PER_SEC);
+//    cout << "Time taken by TLM algorithm : " << fixed << TLM_Execution_Time << setprecision(5);
+//    cout << " sec " << endl;
+//    return 0;
 }
 
 double tlmSource(double time, double delay, double width)
