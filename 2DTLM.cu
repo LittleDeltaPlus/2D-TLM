@@ -13,6 +13,7 @@
 #include "device_launch_parameters.h"
 
 #include <iostream>
+#include <chrono>
 #include <fstream>
 #include <ctime>   // for clock
 #include <cmath>
@@ -223,12 +224,13 @@ int main()
     dim3 dimBlock(10,10);
     dim3 dimGrid(ceil(NX/dimBlock.x),ceil(NY/dimBlock.y));
 
-    start = std::clock();
+    auto t1 = std::chrono::high_resolution_clock::now();
     // Start of TLM algorithm
     //
     // loop over total time NT in steps of dt
     for (int n = 0; n < NT; n++)
     {
+        auto lap_start = std::chrono::high_resolution_clock::now();
         double source = (1 / sqrt(2.)) * exp(-(n * dt - delay) * (n * dt - delay) / (width * width));
         //Apply the newly calculated Source
         tlmApplySource  <<<1, 1>>> (dev_Data, source, NX);
@@ -239,8 +241,11 @@ int main()
         //Get the Output from the mesh
         evaluateOut     <<<1, 1>>>(dev_Data, NX, n);
         //Hint Progress
-        if (n % 100 == 0)
-            cout << n << endl;
+        auto lap_end = std::chrono::high_resolution_clock::now();
+        if (n % 100 == 0){
+            std::chrono::duration<double> diff = lap_end-lap_start;
+            cout << n << ", " << diff.count() << endl;
+        }
     }
     //Get Result from Device
     cudaMemcpy(v_output, dev_output, sizeof(double)*NT, cudaMemcpyDeviceToHost);
@@ -248,14 +253,15 @@ int main()
     for (int n = 0; n < NT; n++){
         output << n * dt << "  " <<  v_output[n] << endl;
     }
-
+    auto t2 = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> diff = t2-t1;
     // End of TLM algorithm
     //Close output file
     output.close();
     //Signify finished
     cout << "Done";
     //Calculate time / Clocks
-    std::cout << '\n' << ((std::clock() - start) / (long)CLOCKS_PER_SEC) << '\n';
+    std::cout << "\nExecuted in:   " << (diff.count()) << "s \n";
     cin.get();
 
 
