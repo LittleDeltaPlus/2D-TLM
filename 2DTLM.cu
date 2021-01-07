@@ -63,7 +63,7 @@ __global__ void tlmApplySource( dev_data dev,double source, int N){
  * @param N
  * @param source
  */
-__global__ void tlmScatter(dev_data dev, int N, double source){
+__global__ void tlmScatter(dev_data dev, int N){
 
     auto idx = blockIdx.x * blockDim.x + threadIdx.x;
     auto idy = blockIdx.y * blockDim.y + threadIdx.y;
@@ -92,7 +92,7 @@ __global__ void tlmScatter(dev_data dev, int N, double source){
  * @param N
  * @param n
  */
-__global__ void tlmConnect(dev_data dev, int N, int n)
+__global__ void tlmConnect(dev_data dev, int N)
 {
     auto idx = blockIdx.x*blockDim.x + threadIdx.x;
     auto idy = blockIdx.y*blockDim.y + threadIdx.y;
@@ -137,15 +137,13 @@ __global__ void tlmConnect(dev_data dev, int N, int n)
  * @param N
  * @param n
  */
-__global__ void evaluateOut(dev_data dev, int N, int n){
+__global__ void tlmApplyProbe(dev_data dev, int n, int N){
     auto tmp_idx = dev.d_Eout[0] + dev.d_Eout[1] * N;
     dev.out[n] = dev.d_V2[tmp_idx] + dev.d_V4[tmp_idx];
 }
 
 int main()
 {
-    //Create Timer
-    clock_t start;
     //Specify Simulation Meta Parameters
     int NX = 100;                           // dim one of nodes
     int NY = 100;                           // dim 2 of nodes
@@ -224,22 +222,26 @@ int main()
     dim3 dimBlock(10,10);
     dim3 dimGrid(ceil(NX/dimBlock.x),ceil(NY/dimBlock.y));
 
+    //Start Timer
     auto t1 = std::chrono::high_resolution_clock::now();
     // Start of TLM algorithm
     //
     // loop over total time NT in steps of dt
     for (int n = 0; n < NT; n++)
     {
+        //Lap Timer
         auto lap_start = std::chrono::high_resolution_clock::now();
+
         double source = (1 / sqrt(2.)) * exp(-(n * dt - delay) * (n * dt - delay) / (width * width));
         //Apply the newly calculated Source
         tlmApplySource  <<<1, 1>>> (dev_Data, source, NX);
         //Apply Scatter Algorithm
-        tlmScatter      <<<dimGrid, dimBlock>>> (dev_Data, NX, source);
+        tlmScatter      <<<dimGrid, dimBlock>>> (dev_Data, NX);
         //Apply Connect Algorithm (Including Boundaries)
-        tlmConnect      <<<dimGrid, dimBlock>>> (dev_Data, NX, n);
+        tlmConnect      <<<dimGrid, dimBlock>>> (dev_Data, NX);
         //Get the Output from the mesh
-        evaluateOut     <<<1, 1>>>(dev_Data, NX, n);
+        tlmApplyProbe   <<<1, 1>>> (dev_Data, n, NX);
+
         //Hint Progress
         auto lap_end = std::chrono::high_resolution_clock::now();
         if (n % 100 == 0){
@@ -253,6 +255,7 @@ int main()
     for (int n = 0; n < NT; n++){
         output << n * dt << "  " <<  v_output[n] << endl;
     }
+    //End Timer
     auto t2 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> diff = t2-t1;
     // End of TLM algorithm
