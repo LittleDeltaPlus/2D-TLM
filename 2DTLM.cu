@@ -1,10 +1,10 @@
 // 2D TLM for CUDA - Seámus Doran, Universiy of Nottingham 2020
 //
-// Simulates a line divided into NX segments (nodes) of length dl
+// Simulates a line divided into NX*NY segments (nodes) of length dl
 //
 // Origin of line is matched to the source impedance i.e. no reflection from the left side of the source
 //
-// Line is excited at node 0 with a gaussian voltage
+// Line is excited at node Ein{ x, y } with a gaussian voltage
 //
 // Line is terminated with a short circuit to ground 
 // (results in an equal and opposite reflection at the end of the line)
