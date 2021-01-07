@@ -1,4 +1,4 @@
-// 1D TLM for CUDA - Department of EEE, Universiy of Nottingham 2020
+// 2D TLM for CUDA - Seámus Doran, Universiy of Nottingham 2020
 //
 // Simulates a line divided into NX segments (nodes) of length dl
 //
@@ -23,11 +23,13 @@
 
 using namespace std;
 
-double  tlmSource(double, double, double);          // excitation function
-double ** declare_array2D(int, int);                // Population function
+double** declare_array2D(int, int);                // Population function
 
 ofstream output("output.out");       // log probe voltage at a pint on the line versus time
 
+/**
+ *
+ */
 struct dev_data{
     double* d_V1;
     double* d_V2;
@@ -38,6 +40,13 @@ struct dev_data{
     const int* d_Ein;
     const int* d_Eout;
 };
+
+/**
+ *
+ * @param dev
+ * @param source
+ * @param N
+ */
 __global__ void tlmApplySource( dev_data dev,double source, int N){
     //Apply Source
     auto tmp_idx = dev.d_Ein[0] + dev.d_Ein[1] * N;
@@ -47,7 +56,12 @@ __global__ void tlmApplySource( dev_data dev,double source, int N){
     dev.d_V4[tmp_idx] = dev.d_V4[tmp_idx] + source;
 }
 
-// TLM scatter on GPU
+/**
+ *
+ * @param dev
+ * @param N
+ * @param source
+ */
 __global__ void tlmScatter(dev_data dev, int N, double source){
 
     auto idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -55,17 +69,9 @@ __global__ void tlmScatter(dev_data dev, int N, double source){
 
     auto index = idx + idy * N;
 
-//    if (idx == 0 && idy == 0){
-//        auto tmp_idx = dev.d_Ein[0] + dev.d_Ein[1] * N;
-//        dev.d_V1[tmp_idx] = dev.d_V1[tmp_idx] + source;
-//        dev.d_V2[tmp_idx] = dev.d_V2[tmp_idx] - source;
-//        dev.d_V3[tmp_idx] = dev.d_V3[tmp_idx] - source;
-//        dev.d_V4[tmp_idx] = dev.d_V4[tmp_idx] + source;
-//    }
-
     //scatter
     double Z = dev.coeff[0];
-   if ( index < N*N)
+    if ( index < N*N)
     {
         double I = (2 * dev.d_V1[index] + 2 * dev.d_V4[index] - 2 * dev.d_V2[index] - 2 * dev.d_V3[index]) / (4 * Z);
         double V = 2 * dev.d_V1[index] - I * Z;    //port1
@@ -76,10 +82,15 @@ __global__ void tlmScatter(dev_data dev, int N, double source){
         dev.d_V3[index] = V - dev.d_V3[index];
         V = 2 * dev.d_V4[index] - I * Z;         //port4
         dev.d_V4[index] = V - dev.d_V4[index];
-   }
+    }
 }
 
-//TLM connect and apply boundary on GPU
+/**
+ *
+ * @param dev
+ * @param N
+ * @param n
+ */
 __global__ void tlmConnect(dev_data dev, int N, int n)
 {
     auto idx = blockIdx.x*blockDim.x + threadIdx.x;
@@ -102,61 +113,47 @@ __global__ void tlmConnect(dev_data dev, int N, int n)
         dev.d_V3[idx + (idy - 1)*N] = V;
     }
 
-//    //Apply Boundaries
-//    double rXmin = dev.coeff[2];
-//    double rXmax = dev.coeff[3];
-//    double rYmin = dev.coeff[4];
-//    double rYmax = dev.coeff[5];
-//
-//    if (idy == N-1*N && index < N*N){
-//        dev.d_V3[idx + (N - 1)*N] = rYmax * dev.d_V3[idx + (N - 1)*N];
-//        dev.d_V1[idx] = rYmin * dev.d_V1[idx];
-//    }
-//
-//    if (idx == n-1 && index < N*N) {
-//        dev.d_V4[(N - 1) + idy*N] = rXmax * dev.d_V4[(N - 1) + idy*N];
-//        dev.d_V2[idy*N] = rXmin * dev.d_V2[idy*N];
-//    }
+    //Apply Boundaries
+    double rXmin = dev.coeff[1];
+    double rXmax = dev.coeff[2];
+    double rYmin = dev.coeff[3];
+    double rYmax = dev.coeff[4];
 
-
-}
-
-__global__ void applyBoundary(dev_data dev, int N) {
-    double rXmin = dev.coeff[2];
-    double rXmax = dev.coeff[3];
-    double rYmin = dev.coeff[4];
-    double rYmax = dev.coeff[5];
-
-    for (int x = 0; x < N; x++) {
-        dev.d_V3[x + (N - 1)*N] = rYmax * dev.d_V3[x + (N - 1)*N];
-        dev.d_V1[x] = rYmin * dev.d_V1[x];
+    if (idy == N-1*N && idx < N*N){
+        dev.d_V3[idx + (N - 1)*N] = rYmax * dev.d_V3[idx + (N - 1)*N];
+        dev.d_V1[idx] = rYmin * dev.d_V1[idx];
     }
-    for (int y = 0; y < N; y++) {
-        dev.d_V4[(N - 1) + y*N] = rXmax * dev.d_V4[(N - 1) + y*N];
-        dev.d_V2[y*N] = rXmin * dev.d_V2[y*N];
+
+    if (idx == N-1 && idy < N*N) {
+        dev.d_V4[(N - 1) + idy*N] = rXmax * dev.d_V4[(N - 1) + idy*N];
+        dev.d_V2[idy*N] = rXmin * dev.d_V2[idy*N];
     }
 }
 
-__global__ void evalutateOut(dev_data dev, int N, int n){
+/**
+ *
+ * @param dev
+ * @param N
+ * @param n
+ */
+__global__ void evaluateOut(dev_data dev, int N, int n){
     auto tmp_idx = dev.d_Eout[0] + dev.d_Eout[1] * N;
     dev.out[n] = dev.d_V2[tmp_idx] + dev.d_V4[tmp_idx];
 }
 
 int main()
 {
-
-
-    clock_t start, end;
-
-    int NX = 100;   // dim one of nodes
-    int NY = 100;   // dim 2 of nodes
-    int NT = 8192;   // number of time steps
-    double dl = 1;       // set node line segment length in metres
-    double dt = dl / (sqrt(2.) * c);    // set time step duration
+    //Create Timer
+    clock_t start;
+    //Specify Simulation Meta Parameters
+    int NX = 100;                           // dim one of nodes
+    int NY = 100;                           // dim 2 of nodes
+    int NT = 8192;                          // number of time steps
+    double dl = 1;                          // set node line segment length in metres
+    double dt = dl / (sqrt(2.) * c);     // set time step duration
 
 
     //2D mesh variables
-    double I = 0;
     double** V1 = declare_array2D(NX, NY);
     double** V2 = declare_array2D(NX, NY);
     double** V3 = declare_array2D(NX, NY);
@@ -166,25 +163,25 @@ int main()
         v_output[n] = 0;
     }
 
-    double Z = eta0 / sqrt(2.);
-
-
     //boundary coefficients
     double rXmin = -1;
     double rXmax = -1;
     double rYmin = -1;
     double rYmax = -1;
 
-    double coeff[] = {Z, I, rXmin, rXmax, rYmin, rYmax};
 
-    //input / v_output
+
+    // specify mesh simulation parameters
+    double Z = eta0 / sqrt(2.);
     double width = 20 * dt * sqrt(2.);
     double delay = 100 * dt * sqrt(2.);
     int Ein[] = { 10,10 };
     int Eout[] = { 15,15 };
 
+    //Group Coefficients
+    double coeff[] = {Z, rXmin, rXmax, rYmin, rYmax};
 
-    /// device arrays
+    //device arrays
     double* dev_V1;
     double* dev_V2;
     double* dev_V3;
@@ -195,7 +192,7 @@ int main()
     int* dev_Eout;
 
 
-    ///allocate memory on device
+    //allocate memory on device
     auto sz = NX * NY * sizeof(double);
     cudaMalloc((void**)&dev_V1, sz);
     cudaMalloc((void**)&dev_V2, sz);
@@ -206,10 +203,9 @@ int main()
     cudaMalloc((void**)&dev_Ein, sizeof(int)*2);
     cudaMalloc((void**)&dev_Eout, sizeof(int)*2);
 
-    auto err = cudaGetLastError();
 
 
-    ///copy memory areas from host to device
+    //copy memory areas from host to device
     cudaMemcpy(dev_V1, V1, NX * NY * sizeof(double), cudaMemcpyHostToDevice);
     cudaMemcpy(dev_V2, V2, NX * NY * sizeof(double), cudaMemcpyHostToDevice);
     cudaMemcpy(dev_V3, V3, NX * NY * sizeof(double), cudaMemcpyHostToDevice);
@@ -218,54 +214,50 @@ int main()
     cudaMemcpy(dev_Ein, Ein, sizeof(int)*2, cudaMemcpyHostToDevice);
     cudaMemcpy(dev_Eout, Eout, sizeof(int)*2, cudaMemcpyHostToDevice);
 
-    err = cudaGetLastError();
 
 
-    // Start of TLM algorithm
-    //
-    // loop over total time NT in steps of dt
 
+    //Group Device Variables to simplify Kernel Calls
     dev_data dev_Data{dev_V1, dev_V2, dev_V3, dev_V4, dev_coeff, dev_output, dev_Ein, dev_Eout};
-
-    start = clock();
-
+    //Determine Kernel Size
     dim3 dimBlock(10,10);
     dim3 dimGrid(ceil(NX/dimBlock.x),ceil(NY/dimBlock.y));
 
-    err = cudaGetLastError();
-    int i = 0;
+    start = std::clock();
+    // Start of TLM algorithm
+    //
+    // loop over total time NT in steps of dt
     for (int n = 0; n < NT; n++)
     {
-
         double source = (1 / sqrt(2.)) * exp(-(n * dt - delay) * (n * dt - delay) / (width * width));
-        tlmApplySource <<<1, 1>>> (dev_Data, source, NX);
-        err = cudaGetLastError();
-        i = 0;
-        tlmScatter <<<dimGrid, dimBlock>>> (dev_Data, NX, source);
-        err = cudaGetLastError();
-        i = 0;
-        cudaDeviceSynchronize();
-        tlmConnect <<<dimGrid, dimBlock>>> (dev_Data, NX, n);
-        err = cudaGetLastError();
-        i = 0;
-        applyBoundary<<<1, 1>>> (dev_Data, NX);
-        err = cudaGetLastError();
-        i=0;
-        evalutateOut<<<1, 1>>>(dev_Data, NX,n);
-        err = cudaGetLastError();
-        i = 0;
+        //Apply the newly calculated Source
+        tlmApplySource  <<<1, 1>>> (dev_Data, source, NX);
+        //Apply Scatter Algorithm
+        tlmScatter      <<<dimGrid, dimBlock>>> (dev_Data, NX, source);
+        //Apply Connect Algorithm (Including Boundaries)
+        tlmConnect      <<<dimGrid, dimBlock>>> (dev_Data, NX, n);
+        //Get the Output from the mesh
+        evaluateOut     <<<1, 1>>>(dev_Data, NX, n);
+        //Hint Progress
+        if (n % 100 == 0)
+            cout << n << endl;
     }
-    err = cudaGetLastError();
+    //Get Result from Device
     cudaMemcpy(v_output, dev_output, sizeof(double)*NT, cudaMemcpyDeviceToHost);
-    err = cudaGetLastError();
+    //Save output to file
     for (int n = 0; n < NT; n++){
         output << n * dt << "  " <<  v_output[n] << endl;
     }
-    // End of TLM algorithm
-    
-    end = clock();
 
-    // copy array of measured voltages from device
+    // End of TLM algorithm
+    //Close output file
+    output.close();
+    //Signify finished
+    cout << "Done";
+    //Calculate time / Clocks
+    std::cout << '\n' << ((std::clock() - start) / (long)CLOCKS_PER_SEC) << '\n';
+    cin.get();
+
 
     // free memory allocated on the GPU
     cudaFree(dev_V1);
@@ -277,24 +269,8 @@ int main()
     cudaFree(dev_Ein);
     cudaFree(dev_Eout);
 
-
-//    double TLM_Execution_Time = double(end - start) / double(CLOCKS_PER_SEC);
-//    cout << "Time taken by TLM algorithm : " << fixed << TLM_Execution_Time << setprecision(5);
-//    cout << " sec " << endl;
-//    return 0;
 }
 
-double tlmSource(double time, double delay, double width)
-{
-    // calculate value of gaussian ecitation voltage at time point
-    //E0 = (1 / sqrt(2.)) * exp(-(n * dt - delay) * (n * dt - delay) / (width * width));
-    double source = exp(-1.0 * double(time - delay) * double(time - delay) / (width * width));
-
-    // log value of gaussian voltage to file
-//    gaussian_time << time << "  " << source << endl; //write source funtion to file, comment out for timing
-
-    return source;
-}
 
 double** declare_array2D(int NX, int NY) {
     auto** V = new double* [NX];
