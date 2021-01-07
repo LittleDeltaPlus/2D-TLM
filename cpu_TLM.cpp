@@ -2,6 +2,7 @@
 // Created by deltaPlus on 04/01/2021.
 //
 #include<cstdio>
+#include <chrono>
 #include<iostream>
 #include<fstream>
 #include <ctime>
@@ -45,8 +46,10 @@ int main() {
 
     ofstream output("output.out");
 
-    for (int n = 0; n < NT; n++) {
+    auto t1 = std::chrono::high_resolution_clock::now();
 
+    for (int n = 0; n < NT; n++) {
+        auto lap_start = std::chrono::high_resolution_clock::now();
         //source
         E0 = (1 / sqrt(2.)) * exp(-(n * dt - delay) * (n * dt - delay) / (width * width));
         V1[Ein[0]][Ein[1]] = V1[Ein[0]][Ein[1]] + E0;
@@ -95,15 +98,19 @@ int main() {
             V4[NX - 1][y] = rXmax * V4[NX - 1][y];
             V2[0][y] = rXmin * V2[0][y];
         }
-
+        auto lap_end = std::chrono::high_resolution_clock::now();
         output << n * dt << "  " << V2[Eout[0]][Eout[1]] + V4[Eout[0]][Eout[1]] << endl;
-        if (n % 100 == 0)
-            cout << n << endl;
+        if (n % 100 == 0){
+            std::chrono::duration<double> diff = lap_end-lap_start;
+            cout << n <<", "<< diff.count() << endl;
+        }
 
     }
+    auto t2 = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> diff = t2-t1;
     output.close();
     cout << "Done";
-    std::cout << '\n' << ((std::clock() - start) / (long)CLOCKS_PER_SEC) << '\n';
+    std::cout << '\n' << "Executed in: " <<(diff.count()) << "s \n";
     cin.get();
 
 
