@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.15)
+cmake_minimum_required(VERSION 3.12)
 
 set(CMAKE_CUDA_COMPILER "/usr/local/cuda-11.2/bin/nvcc")
 set(CMAKE_CUDA_STANDARD 14)
