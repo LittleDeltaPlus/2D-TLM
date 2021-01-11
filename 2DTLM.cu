@@ -1,14 +1,16 @@
-// 2D TLM for CUDA - Seámus Doran, Universiy of Nottingham 2020
-//
-// Simulates a line divided into NX*NY segments (nodes) of length dl
-//
-// Origin of line is matched to the source impedance i.e. no reflection from the left side of the source
-//
-// Line is excited at node Ein{ x, y } with a gaussian voltage
-//
-// Line is terminated with a short circuit to ground 
-// (results in an equal and opposite reflection at the end of the line)
-
+/***********************************************************************************************************************
+ * 2D TLM for CUDA - Seámus Doran, Universiy of Nottingham 2020
+ *
+ * Simulates a network divided into N*N segments (nodes) of length dl
+ *
+ * Origin of line is matched to the source impedance i.e. no reflection from the left side of the source
+ *
+ * Line is excited at node Ein{ x, y } with a gaussian voltage
+ *
+ * Line is terminated with a short circuit to ground
+ *
+ * (results in an equal and opposite reflection at the end of the line)
+***********************************************************************************************************************/
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
@@ -29,24 +31,24 @@ double** declare_array2D(int, int);                // Population function
 ofstream output("output.out");       // log probe voltage at a pint on the line versus time
 
 /**
- *
+ *  A Struct containing pointers to Data stored on Device
  */
 struct dev_data{
     double* d_V1;
     double* d_V2;
     double* d_V3;
     double* d_V4;
-    const double* coeff;
-    double* out;
-    const int* d_Ein;
-    const int* d_Eout;
+    const double* coeff; /// A list of Coefficients, containing Z and boundary conditions
+    double* out;    /// A list of voltages at the output node
+    const int* d_Ein;   /// The input node
+    const int* d_Eout;  /// The output node
 };
 
 /**
- *
- * @param dev
- * @param source
- * @param N
+ * A kernel to apply a Source Voltage to a supplied input node (Ein)
+ * @param dev pointers to device data
+ * @param source The source to apply
+ * @param N The size of Computational Domain
  */
 __global__ void tlmApplySource( dev_data dev,double source, int N){
     //Apply Source
@@ -58,10 +60,9 @@ __global__ void tlmApplySource( dev_data dev,double source, int N){
 }
 
 /**
- *
- * @param dev
- * @param N
- * @param source
+ *  A kernel to 'scatter' impulses based on a previously applied source
+ * @param dev pointers to device data
+ * @param N The size of Computational Domain
  */
 __global__ void tlmScatter(dev_data dev, int N){
 
@@ -72,78 +73,68 @@ __global__ void tlmScatter(dev_data dev, int N){
 
     //scatter
     double Z = dev.coeff[0];
-    if ( index < N*N)
-    {
+    if ( index < N*N){
         double I = (2 * dev.d_V1[index] + 2 * dev.d_V4[index] - 2 * dev.d_V2[index] - 2 * dev.d_V3[index]) / (4 * Z);
-        double V = 2 * dev.d_V1[index] - I * Z;    //port1
-        dev.d_V1[index] = V - dev.d_V1[index];
-        V = 2 * dev.d_V2[index] + I * Z;         //port2
-        dev.d_V2[index] = V - dev.d_V2[index];
-        V = 2 * dev.d_V3[index] + I * Z;         //port3
-        dev.d_V3[index] = V - dev.d_V3[index];
-        V = 2 * dev.d_V4[index] - I * Z;         //port4
-        dev.d_V4[index] = V - dev.d_V4[index];
+        double V = I*Z;
+        dev.d_V1[index] = dev.d_V1[index] - V;    //port1
+        dev.d_V2[index] = dev.d_V2[index] + V;    //port2
+        dev.d_V3[index] = dev.d_V3[index] + V;    //port3
+        dev.d_V4[index] = dev.d_V4[index] - V;    //port4
     }
 }
 
 /**
- *
- * @param dev
- * @param N
- * @param n
+ *  A kernel to propagate scattered impulses and apply boundary conditions
+ * @param dev pointers to device data
+ * @param N The size of Computational Domain
  */
-__global__ void tlmConnect(dev_data dev, int N)
-{
+__global__ void tlmConnect(dev_data dev, int N){
     auto idx = blockIdx.x*blockDim.x + threadIdx.x;
     auto idy = blockIdx.y*blockDim.y + threadIdx.y;
 
     auto index = idx + idy * N;
 
     //Connect
-    if ( idx > 0 && index < N*N)
-    {
+    if ( idx > 0 && index < N*N){
         auto V = dev.d_V2[index];
         dev.d_V2[index] = dev.d_V4[(idx - 1)+ idy * N];
         dev.d_V4[(idx - 1) + idy * N] = V;
     }
 
-    if ( idy > 0 && index < N*N)
-    {
+    if ( idy > 0 && index < N*N){
         auto V = dev.d_V1[index];
         dev.d_V1[index] = dev.d_V3[idx + (idy - 1)*N];
         dev.d_V3[idx + (idy - 1)*N] = V;
     }
 
     //Apply Boundaries
-    double rXmin = dev.coeff[1];
-    double rXmax = dev.coeff[2];
-    double rYmin = dev.coeff[3];
-    double rYmax = dev.coeff[4];
+    // rXmin = dev.coeff[1], rXmax = dev.coeff[2]
+    // rYmin = dev.coeff[3], rYmax = dev.coeff[4]
 
-    if (idy == N-1*N && idx < N*N){
-        dev.d_V3[idx + (N - 1)*N] = rYmax * dev.d_V3[idx + (N - 1)*N];
-        dev.d_V1[idx] = rYmin * dev.d_V1[idx];
+    if (idy == N-1*N && idx < N){
+        dev.d_V3[idx + (N - 1)*N] = dev.coeff[4] * dev.d_V3[idx + (N - 1)*N];
+        dev.d_V1[idx] = dev.coeff[3] * dev.d_V1[idx];
     }
 
-    if (idx == N-1 && idy < N*N) {
-        dev.d_V4[(N - 1) + idy*N] = rXmax * dev.d_V4[(N - 1) + idy*N];
-        dev.d_V2[idy*N] = rXmin * dev.d_V2[idy*N];
+    if (idx == N-1 && idy < N) {
+        dev.d_V4[(N - 1) + idy*N] = dev.coeff[2] * dev.d_V4[(N - 1) + idy*N];
+        dev.d_V2[idy*N] = dev.coeff[1] * dev.d_V2[idy*N];
     }
 }
 
 /**
  *
- * @param dev
- * @param N
- * @param n
+ * A kernel to evaluate the voltage at a supplied output node (Eout)
+ * @param dev pointers to device data
+ * @param n The current time-step index
+ * @param N The size of Computational Domain
  */
 __global__ void tlmApplyProbe(dev_data dev, int n, int N){
     auto tmp_idx = dev.d_Eout[0] + dev.d_Eout[1] * N;
     dev.out[n] = dev.d_V2[tmp_idx] + dev.d_V4[tmp_idx];
 }
 
-int main()
-{
+int main(){
     //Specify Simulation Meta Parameters
     int NX = 100;                           // dim one of nodes
     int NY = 100;                           // dim 2 of nodes
@@ -272,7 +263,12 @@ int main()
 
 }
 
-
+/**
+ * A function to fill 2D arrays with 0s
+ * @param NX The Array's X Dimension
+ * @param NY The Array's Y Dimension
+ * @return A 2D array of 0s
+ */
 double** declare_array2D(int NX, int NY) {
     auto** V = new double* [NX];
     for (int x = 0; x < NX; x++) {
